@@ -1,5 +1,7 @@
 // SFClass
 
+import {Parser, SFSyntaxError} from "./SFParse.js";
+
 export type ParameterMap = Map<string, SFObject>;
 export type SFObject =
     | SFString
@@ -44,7 +46,17 @@ export abstract class SFItem extends Map<string, SFObject> {
         return key;
     }
 
-    abstract sfSerialize(options?: paramOptions): string
+    abstract sfSerialize(options?: paramOptions): string;
+
+    mapToJSON() {
+        const nullProto = Object.create(null);
+        for (const [key, value] of this) {
+            if (typeof (key as any) === 'string') {
+                nullProto[key] = value;
+            }
+        }
+        return nullProto;
+    }
 }
 
 type paramOptions = { inner?: boolean, isParam?: boolean };
@@ -79,7 +91,7 @@ export class SFString extends SFItem {
     }
 
     toJSON() {
-        return this.#stringValue;
+        return {value: this.#stringValue, params: this.mapToJSON()};
     }
 }
 
@@ -113,7 +125,7 @@ export class SFToken extends SFItem {
     }
 
     toJSON() {
-        return this.#tokenValue;
+        return {value: this.#tokenValue, params: this.mapToJSON()};
     }
 }
 
@@ -150,7 +162,7 @@ export class SFDisplayString extends SFItem {
     }
 
     toJSON() {
-        return this.#stringValue;
+        return {value: this.#stringValue, params: this.mapToJSON()};
     }
 }
 
@@ -172,6 +184,10 @@ export class SFInteger extends SFItem {
         return this.#intValue;
     }
 
+    asNumber(): number {
+        return Number(this.#intValue);
+    }
+
     sfSerialize(options?: paramOptions) {
         const {isParam} = resolveSFSerialize(options);
         return `${this.#intValue}${this.serializeParams(isParam)}`;
@@ -187,7 +203,7 @@ export class SFInteger extends SFItem {
 
     toJSON() {
         // @ts-ignore my editor doesnt know JSON.rawJSON
-        return JSON.rawJSON(this.#intValue);
+        return {value: JSON.rawJSON(this.#intValue), params: this.mapToJSON()};
     }
 }
 
@@ -237,7 +253,7 @@ export class SFDecimal extends SFItem {
 
     toJSON() {
         // @ts-ignore my editor doesnt know JSON.rawJSON
-        return JSON.rawJSON(this.sfSerialize({noParam: true}));
+        return {value: JSON.rawJSON(this.sfSerialize({noParam: true})), params: this.mapToJSON()};
     }
 }
 
@@ -249,6 +265,18 @@ export class SFDate extends SFItem {
         (this.#dateValue = new Date(date ?? Date.now())).setUTCMilliseconds(0);
         // NaN dates throw a RangeError
         this.#dateValue.toISOString();
+    }
+
+    static parse(input: string, parser: Parser) {
+        const {offset} = parser;
+        if (input.at(offset) === '@') {
+            const newParser = new Parser(input, offset + 1), {value, chars} =
+                newParser._parse({expect: SFInteger}) as { value: SFInteger, chars: number };
+            parser.offset += chars + 1;
+            return this.fromSeconds(value.asNumber());
+        } else {
+            throw new SFSyntaxError('SFDate cannot be parsed as SFDate');
+        }
     }
 
     toString() {
@@ -274,7 +302,8 @@ export class SFDate extends SFItem {
 
     toJSON() {
         // noinspection JSPrimitiveTypeWrapperUsage
-        return Reflect.apply(Date.prototype.toJSON, this, new Array);
+        const value = Reflect.apply(Date.prototype.toJSON, this, new Array);
+        return {value, params: this.mapToJSON()};
     }
 
     static fromUTC(y: number = 2024, m: number = 1, d: number = 1, h: number = 0, i: number = 0, s: number = 0) {
@@ -394,14 +423,14 @@ export class SFDate extends SFItem {
     withUTCMonth(month?: number, date?: number) {
         const day = new Date(this.#dateValue);
         [month, date].at(0);
-        Reflect.apply(day.setUTCMonth, date, arguments);
+        Reflect.apply(day.setUTCMonth, day, arguments);
         return new (this.constructor as typeof SFDate)(day);
     }
 
     withUTCDate(date?: number) {
         const day = new Date(this.#dateValue);
         [date].at(0);
-        Reflect.apply(day.setUTCDate, date, arguments);
+        Reflect.apply(day.setUTCDate, day, arguments);
         return new (this.constructor as typeof SFDate)(day);
     }
 }
@@ -409,7 +438,7 @@ export class SFDate extends SFItem {
 export class SFBoolean extends SFItem {
     readonly #booleanValue;
 
-    constructor(boolean: boolean) {
+    constructor(boolean?: boolean) {
         super();
         this.#booleanValue = Boolean(boolean);
     }
@@ -599,7 +628,7 @@ export class SFDictionary extends Map<string, SFObject> {
     }
 }
 
-export function isSFWrapper(value: any) {
+export function isSFWrapper(value: any, primitiveOnly?: boolean) {
     if (value instanceof SFString) return true;
     if (value instanceof SFToken) return true;
     if (value instanceof SFDisplayString) return true;
@@ -608,8 +637,10 @@ export function isSFWrapper(value: any) {
     if (value instanceof SFDate) return true;
     if (value instanceof SFBoolean) return true;
     if (value instanceof SFByteSequence) return true;
-    if (value instanceof SFDictionary) return true;
-    if (value instanceof SFList) return true;
+    if (!primitiveOnly) {
+        if (value instanceof SFDictionary) return true;
+        if (value instanceof SFList) return true;
+    }
     // otherwise
     return false;
 
