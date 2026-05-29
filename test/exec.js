@@ -1,4 +1,5 @@
 // random
+//Reflect.ownKeys(Date.prototype).filter(str=>str.startsWith?.('get')).join().replace(/,/g,', ')
 for (let ownKey of Reflect.ownKeys(Date.prototype).filter(str => str.startsWith?.('to'))) {
     if (ownKey === 'getYear') console.log('getYear() {return this.#dateValue.getFullYear() - 1900;}');
     else console.log(`${ownKey}() {return this.#dateValue.${ownKey}();}`);

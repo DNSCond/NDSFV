@@ -20,7 +20,7 @@ export abstract class SFItem extends Map<string, SFObject> {
     }
 
     set(key: string, value: SFObject | boolean | number | string | bigint): this {
-        return super.set(this.validateKey(key), toSFWrapperValue(value, true, true));
+        return super.set(this.validateKey(key), toSFWrapperValue(value, {itemOnly: true, strict: true}));
     }
 
     // Helper to serialize parameters across all child classes
@@ -77,6 +77,10 @@ export class SFString extends SFItem {
         const {isParam} = resolveSFSerialize(options);
         return '"' + this.#stringValue.replaceAll(/\\/g, '\\\\').replaceAll(/"/g, '\\"') + '"' + this.serializeParams(isParam);
     }
+
+    toJSON() {
+        return this.#stringValue;
+    }
 }
 
 const INVALID_ASCII_RE = /[^\x20-\x7E]/,
@@ -106,6 +110,10 @@ export class SFToken extends SFItem {
     sfSerialize(options?: paramOptions) {
         const {isParam} = resolveSFSerialize(options);
         return this.#tokenValue + this.serializeParams(isParam);
+    }
+
+    toJSON() {
+        return this.#tokenValue;
     }
 }
 
@@ -140,6 +148,10 @@ export class SFDisplayString extends SFItem {
         }
         return encoded + '"' + this.serializeParams(isParam);
     }
+
+    toJSON() {
+        return this.#stringValue;
+    }
 }
 
 export class SFInteger extends SFItem {
@@ -172,6 +184,11 @@ export class SFInteger extends SFItem {
     asIntN(bits: number) {
         return new (this.constructor as typeof SFInteger)(BigInt.asIntN(bits, this.#intValue));
     };
+
+    toJSON() {
+        // @ts-ignore my editor doesnt know JSON.rawJSON
+        return JSON.rawJSON(this.#intValue);
+    }
 }
 
 export class SFDecimal extends SFItem {
@@ -200,7 +217,7 @@ export class SFDecimal extends SFItem {
         return this.#numberValue;
     }
 
-    sfSerialize(options?: paramOptions) {
+    sfSerialize(options?: paramOptions & { noParam?: boolean }) {
         const {isParam} = resolveSFSerialize(options);
         // Round to max 3 decimal places
         let numStr = (Math.round(this.#numberValue * 1000) / 1000).toString();
@@ -214,13 +231,18 @@ export class SFDecimal extends SFItem {
         if (!numStr.includes('.')) {
             numStr += '.0';
         }
+        if (options?.noParam) return numStr;
         return numStr + this.serializeParams(isParam);
+    }
+
+    toJSON() {
+        // @ts-ignore my editor doesnt know JSON.rawJSON
+        return JSON.rawJSON(this.sfSerialize({noParam: true}));
     }
 }
 
-//Reflect.ownKeys(Date.prototype).filter(str=>str.startsWith?.('get')).join().replace(/,/g,', ')
 export class SFDate extends SFItem {
-    readonly #dateValue;
+    readonly #dateValue: Date;
 
     constructor(date?: Date | string | number) {
         super();
@@ -255,8 +277,21 @@ export class SFDate extends SFItem {
         return Reflect.apply(Date.prototype.toJSON, this, new Array);
     }
 
+    static fromUTC(y: number = 2024, m: number = 1, d: number = 1, h: number = 0, i: number = 0, s: number = 0) {
+        return new this(Date.UTC(y, m - 1, d, h, i, s));
+    }
+
+    static from(object: { y?: number, m?: number, d?: number, h?: number, i?: number, s?: number }) {
+        const {y, m, d, h, i, s} = object;
+        return this.fromUTC(y ?? 2024, m ?? 1, d ?? 1, h ?? 0, i ?? 0, s ?? 0)
+    }
+
     static fromSeconds(seconds: number) {
         return new this(Math.floor(seconds) * 1000);
+    }
+
+    toSeconds() {
+        return this.#dateValue.setUTCMilliseconds(0) / 1000;
     }
 
     toUTCString() {
@@ -271,39 +306,19 @@ export class SFDate extends SFItem {
         return Reflect.construct(Date, [this.#dateValue]);
     }
 
+    toTemporalZonedDateTime(timezone: string = 'UTC') {
+        // @ts-ignore toTemporalInstant
+        return this.#dateValue.toTemporalInstant().toZonedDateTimeISO(timezone);
+    }
+
+    // @ts-ignore toTemporalInstant
+    static fromTemporal(temporalObject: Temporal.Instant | Temporal.ZonedDateTime): SFDate {
+        const epochMs = temporalObject.epochMilliseconds;
+        if (epochMs === undefined) throw TypeError('temporalObject does not contain epochMilliseconds');
+        return new this(epochMs);
+    }
+
     // date proxy.
-    getDate() {
-        return this.#dateValue.getDate();
-    }
-
-    getDay() {
-        return this.#dateValue.getDay();
-    }
-
-    getFullYear() {
-        return this.#dateValue.getFullYear();
-    }
-
-    getHours() {
-        return this.#dateValue.getHours();
-    }
-
-    getMilliseconds() {
-        return this.#dateValue.getMilliseconds();
-    }
-
-    getMinutes() {
-        return this.#dateValue.getMinutes();
-    }
-
-    getMonth() {
-        return this.#dateValue.getMonth();
-    }
-
-    getSeconds() {
-        return this.#dateValue.getSeconds();
-    }
-
     getTime() {
         return this.#dateValue.getTime();
     }
@@ -344,8 +359,50 @@ export class SFDate extends SFItem {
         return this.#dateValue.getUTCSeconds();
     }
 
-    getYear() {
-        return this.#dateValue.getFullYear() - 1900;
+    getUTCYear() {
+        return this.#dateValue.getUTCFullYear() - 1900;
+    }
+
+    withUTCHours(hours: number, min?: number, sec?: number) {
+        const date = new Date(this.#dateValue);
+        [hours, min, sec,].at(0);
+        Reflect.apply(date.setUTCHours, date, arguments);
+        return new (this.constructor as typeof SFDate)(date);
+    }
+
+    withUTCMinutes(min: number, sec?: number) {
+        const date = new Date(this.#dateValue);
+        [min, sec,].at(0);
+        Reflect.apply(date.setUTCMinutes, date, arguments);
+        return new (this.constructor as typeof SFDate)(date);
+    }
+
+    withUTCSeconds(sec?: number) {
+        const date = new Date(this.#dateValue);
+        [sec,].at(0);
+        Reflect.apply(date.setUTCSeconds, date, arguments);
+        return new (this.constructor as typeof SFDate)(date);
+    }
+
+    withUTCFullYear(year: number, month?: number, date?: number) {
+        const day = new Date(this.#dateValue);
+        [year, month, date].at(0);
+        Reflect.apply(day.setUTCFullYear, day, arguments);
+        return new (this.constructor as typeof SFDate)(day);
+    }
+
+    withUTCMonth(month?: number, date?: number) {
+        const day = new Date(this.#dateValue);
+        [month, date].at(0);
+        Reflect.apply(day.setUTCMonth, date, arguments);
+        return new (this.constructor as typeof SFDate)(day);
+    }
+
+    withUTCDate(date?: number) {
+        const day = new Date(this.#dateValue);
+        [date].at(0);
+        Reflect.apply(day.setUTCDate, date, arguments);
+        return new (this.constructor as typeof SFDate)(day);
     }
 }
 
@@ -368,6 +425,10 @@ export class SFBoolean extends SFItem {
     sfSerialize(options?: paramOptions) {
         const {isParam} = resolveSFSerialize(options);
         return "?" + String(Number(Boolean(this.#booleanValue))) + this.serializeParams(isParam);
+    }
+
+    toJSON() {
+        return this.#booleanValue;
     }
 }
 
@@ -394,6 +455,10 @@ export class SFByteSequence extends SFItem {
         // @ts-ignore
         return ':' + (this.#bytes).toBase64() + ':' + this.serializeParams(isParam);
     }
+
+    toJSON() {
+        return this.sfSerialize();
+    }
 }
 
 
@@ -406,7 +471,10 @@ export class SFList extends Array {
     }
 
     set(key: string, value: SFObject): ParameterMap {
-        return this.#mapData.set(SFItem.prototype.validateKey(key), toSFWrapperValue(value, false, true));
+        return this.#mapData.set(SFItem.prototype.validateKey(key), toSFWrapperValue(value, {
+            itemOnly: false,
+            strict: true
+        }));
     }
 
     has(key: string): boolean {
@@ -444,8 +512,8 @@ export class SFList extends Array {
     validate(strict = true) {
         for (const [value, index] of enumerate(this)) {
             if (isSFWrapper(value)) continue;
-            if (!strict) this[index] = toSFWrapperValue(value, false, true);
-            throw TypeError(`index ${index} is not one of the valid types.`);
+            if (!strict) this[index] = toSFWrapperValue(value, {itemOnly: false, strict: true});
+            else throw TypeError(`index ${index} is not one of the valid types.`);
         }
         return this;
     }
@@ -460,18 +528,26 @@ export class SFList extends Array {
         return (inner ? '(' : '') + output.replace(/,?\x20$/, '')
             + (inner ? ')' + Reflect.apply(SFItem.prototype.serializeParams, this.#mapData, [isParam]) : '');
     }
+
+    // skip toJSON. default should be ok.
 }
 
 Object.defineProperty(SFList.prototype, Symbol.toStringTag, {value: 'SFList'});
 
 export class SFDictionary extends Map<string, SFObject> {
-    constructor(entries?: MapIterator<[string, SFObject]>) {
+    #allowImplicitInteger = false;
+
+    constructor(entries?: MapIterator<[string, SFObject]>, options?: { allowImplicitInteger?: boolean }) {
         super(entries);
+        this.#allowImplicitInteger = Boolean(options?.allowImplicitInteger);
         Object.defineProperty(this, Symbol.toStringTag, {value: new.target.name});
     }
 
     set(key: string, value: SFObject | boolean | number | string | bigint): this {
-        return super.set(SFItem.prototype.validateKey(key), toSFWrapperValue(value, false, true));
+        return super.set(SFItem.prototype.validateKey(key), toSFWrapperValue(value, {
+            allowImplicitInteger: this.allowImplicitInteger,
+            itemOnly: false, strict: true,
+        }));
     }
 
     validate(strict = true) {
@@ -505,6 +581,22 @@ export class SFDictionary extends Map<string, SFObject> {
         }
         return output.replace(/,?\x20$/, '');
     }
+
+    toJSON() {
+        const result = Object.create(null);
+        for (const [key, element] of this.validate(false)) {
+            result[key] = element;
+        }
+        return result;
+    }
+
+    set allowImplicitInteger(value) {
+        this.#allowImplicitInteger = Boolean(value);
+    }
+
+    get allowImplicitInteger() {
+        return this.#allowImplicitInteger;
+    }
 }
 
 export function isSFWrapper(value: any) {
@@ -528,10 +620,20 @@ export function* enumerate<T>(iterator: Iterable<T>): Generator<[T, number], voi
     for (const value of iterator) yield [value, index++];
 }
 
-export function toSFWrapperValue(value: any, itemOnly: boolean = false, strict = false) {
+type toSFWrapperValueOptions = {
+    allowImplicitInteger?: boolean,
+    itemOnly?: boolean,
+    strict?: boolean,
+};
+
+export function toSFWrapperValue(value: any, options?: toSFWrapperValueOptions) {
+    if (isSFWrapper(value)) return value;
+    const {itemOnly, strict, allowImplicitInteger} = options ?? {};
     if (value instanceof String || typeof value === 'string') {
         return new SFString(value as string);
     } else if (value instanceof Number || typeof value === 'number') {
+        if (allowImplicitInteger && Number.isInteger(value))
+            return new SFInteger(value as number);
         return new SFDecimal(value as number);
     } else if (value instanceof Boolean || typeof value === 'boolean') {
         return new SFBoolean(value.valueOf());
@@ -542,6 +644,7 @@ export function toSFWrapperValue(value: any, itemOnly: boolean = false, strict =
     } else if (typeof value === 'bigint') {
         return new SFInteger(value);
     }
+    if (isSFWrapper(value)) return value;
     if (!itemOnly) if (Array.isArray(value)) {
         return Reflect.construct(SFList, value);
     } else if (value instanceof Map && !isSFWrapper(value)) {
