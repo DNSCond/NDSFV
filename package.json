@@ -1,0 +1,20 @@
+{
+  "name": "newline-delimited-structured-fields-value",
+  "version": "0.0.1",
+  "description": "",
+  "keywords": [],
+  "author": "binary-ant",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "test": "node test/test.js",
+    "exec": "node test/exec.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "dependencies": {
+  },
+  "files": [
+    "dist"
+  ]
+}

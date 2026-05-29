@@ -1,0 +1,12 @@
+note.js
+node_modules
+browsertest.html
+assignProperties.ts
+assignProperties.js
+template.js
+tests.html
+-ignore
+*.txt
+.idea
+*.iml
+dist
